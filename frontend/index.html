@@ -93,6 +93,18 @@
     <div id="findingsResults" class="muted">—</div>
   </div>
 
+  <div class="panel">
+    <h2>Vulnérabilités connues (CVE)</h2>
+    <div style="display:flex; gap:8px; margin-bottom:12px;">
+      <input id="cveProduct" type="text" placeholder="Produit (ex: nginx)" style="flex:1; padding:8px; background:var(--panel); border:1px solid var(--border); border-radius:6px; color:var(--text);" />
+      <input id="cveVersion" type="text" placeholder="Version (ex: 1.18.0)" style="width:120px; padding:8px; background:var(--panel); border:1px solid var(--border); border-radius:6px; color:var(--text);" />
+      <button onclick="runCveCheck()" style="padding:8px 16px; background:var(--accent); color:#05170f; border:none; border-radius:6px; font-weight:600; cursor:pointer;">Chercher</button>
+    </div>
+    <div class="muted" style="margin-bottom:8px;">Ou lancez d'abord un scan OSINT ci-dessus : les produits/versions détectés apparaîtront ici en un clic.</div>
+    <div id="cveAutoDetected"></div>
+    <div id="cveResults" class="muted">—</div>
+  </div>
+
   <div class="panel" style="grid-column: span 2;">
     <h2>Détection Active Directory (upload de logs CSV)</h2>
     <div class="upload-area" onclick="document.getElementById('csvInput').click()">
@@ -157,6 +169,15 @@ function renderResults(data) {
     `<div class="finding"><span class="sev medium">MOYEN</span>${f.detail}</div>`
   ).join('') || '<div class="muted">Aucun finding critique détecté.</div>';
 
+  // Produits versionnés -> suggestions de recherche CVE en un clic
+  const cveAutoDiv = document.getElementById('cveAutoDetected');
+  const versioned = data.versioned_products || [];
+  cveAutoDiv.innerHTML = versioned.length
+    ? `<div class="badge-list" style="margin-bottom:10px;">${versioned.map(p =>
+        `<span class="badge" style="cursor:pointer;" onclick="document.getElementById('cveProduct').value='${p.product}'; document.getElementById('cveVersion').value='${p.version}'; runCveCheck();">${p.product} ${p.version}</span>`
+      ).join('')}</div>`
+    : '';
+
   // Carte
   clearMarkers();
   (data.geo_points||[]).forEach(p => {
@@ -170,6 +191,46 @@ function renderResults(data) {
   if (markers.length) {
     const group = new L.featureGroup(markers);
     map.fitBounds(group.getBounds().pad(0.3));
+  }
+}
+
+async function runCveCheck() {
+  const product = document.getElementById('cveProduct').value.trim();
+  const version = document.getElementById('cveVersion').value.trim();
+  if (!product) return;
+
+  const resultsDiv = document.getElementById('cveResults');
+  resultsDiv.innerHTML = '<span class="muted">Recherche en cours (l\'API NVD est limitée à ~1 requête/6s, merci de patienter)...</span>';
+
+  try {
+    const res = await fetch(`${API_BASE}/api/cve-check`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ product, version: version || null, max_results: 10 })
+    });
+    const data = await res.json();
+
+    if (data.error) {
+      resultsDiv.innerHTML = `<span class="muted">Erreur: ${data.error}</span>`;
+      return;
+    }
+
+    if (!data.cves || data.cves.length === 0) {
+      resultsDiv.innerHTML = `<span class="muted">Aucune CVE trouvée pour "${product} ${version}".</span>`;
+      return;
+    }
+
+    resultsDiv.innerHTML = `<div class="muted" style="margin-bottom:8px;">${data.total_results} résultat(s) au total, affichage de ${data.cves.length}</div>` +
+      data.cves.map(c => `
+        <div class="finding">
+          <span class="sev ${(c.severity||'low').toLowerCase()}">${c.severity}</span>
+          <a href="${c.url}" target="_blank" style="color:var(--accent); text-decoration:none;"><b>${c.id}</b></a>
+          ${c.cvss_score ? `<span class="muted"> · score ${c.cvss_score}</span>` : ''}
+          <div style="margin-top:4px;">${c.description}</div>
+        </div>
+      `).join('');
+  } catch (e) {
+    resultsDiv.innerHTML = '<span class="muted">Erreur : backend non joignable.</span>';
   }
 }
 

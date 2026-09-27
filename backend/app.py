@@ -25,6 +25,7 @@ from osint.tech_detect import detect_technologies
 from geomap.geolocate import map_hosts
 from detection.ad_log_parser import run_detection
 from ai_scoring.scorer import score_finding
+from cve_lookup.cve_search import search_cves, search_cves_for_technologies
 
 app = FastAPI(title="Sentinel API", version="0.1.0")
 
@@ -39,6 +40,13 @@ app.add_middleware(
 class ScanRequest(BaseModel):
     domain: str
     use_ai_scoring: bool = False
+    include_cve: bool = False  # désactivé par défaut : ralentit le scan (rate-limit NVD ~6.5s/produit)
+
+
+class CveRequest(BaseModel):
+    product: str
+    version: str | None = None
+    max_results: int = 10
 
 
 @app.get("/health")
@@ -73,6 +81,7 @@ def scan_domain(req: ScanRequest):
         "subdomains": subs_list,
         "subdomains_total_found": len(subs),
         "technologies": tech.get("technologies", []),
+        "versioned_products": tech.get("versioned_products", []),
         "security_headers": tech.get("security_headers", {}),
         "geo_points": geo_points,
         "findings": findings,
@@ -83,7 +92,19 @@ def scan_domain(req: ScanRequest):
             {"finding": f, "analysis": score_finding(f)} for f in findings[:5]
         ]
 
+    if req.include_cve and tech.get("versioned_products"):
+        # Attention: peut être lent (rate-limit public NVD ~1 requête/6.5s)
+        result["cve_results"] = search_cves_for_technologies(tech["versioned_products"])
+
     return result
+
+
+@app.post("/api/cve-check")
+def cve_check(req: CveRequest):
+    """Recherche manuelle de CVE pour un produit/version donné (API NVD)."""
+    if not req.product.strip():
+        raise HTTPException(400, "Produit requis")
+    return search_cves(req.product.strip(), req.version, max_results=req.max_results)
 
 
 @app.post("/api/detect-ad")

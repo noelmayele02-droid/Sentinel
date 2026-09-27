@@ -14,6 +14,7 @@ IA des vulnérabilités trouvées.
 | `backend/osint/` | Sous-domaines (crt.sh), détection techno, headers de sécurité, vérif fuites | ✅ Fonctionnel |
 | `backend/geomap/` | Résolution DNS + géolocalisation IP pour la carte | ✅ Fonctionnel |
 | `backend/detection/` | Analyse de logs Windows Event → alertes Kerberoasting / Pass-the-Hash | ✅ Fonctionnel (règles MITRE ATT&CK) |
+| `backend/cve_lookup/` | Recherche de CVE (API NVD) à partir des produits/versions détectés par `tech_detect.py` | ✅ Fonctionnel (aucune clé requise) |
 | `backend/ai_scoring/` | Priorisation et explication des findings via l'API Claude | ✅ Fonctionnel (clé API requise) |
 | `frontend/index.html` | Dashboard (carte interactive + résultats) | ✅ Fonctionnel |
 
@@ -84,6 +85,37 @@ fort, sévérité `high`) **et en AES128/256** (signal plus faible car c'est le
 chiffrement par défaut moderne, sévérité `medium`) — la démo fonctionne donc
 même si le labo/l'environnement cible utilise un chiffrement moderne par
 défaut.
+
+## Recherche de CVE (API NVD)
+
+`tech_detect.py` extrait désormais aussi les versions de produits quand elles
+sont visibles (header `Server`, `X-Powered-By`, balise `<meta name="generator">`).
+Le module `cve_lookup/cve_search.py` interroge ensuite l'API publique **NVD**
+(National Vulnerability Database, NIST) pour lister les CVE connues.
+
+```bash
+cd backend/cve_lookup
+python cve_search.py nginx 1.18.0
+python cve_search.py wordpress 6.4.2 --max 5
+```
+
+Ou via l'API :
+```bash
+curl -X POST http://localhost:8000/api/cve-check \
+  -H "Content-Type: application/json" \
+  -d '{"product": "apache http server", "version": "2.4.49"}'
+```
+
+⚠️ **Limites à connaître :**
+- L'API NVD publique est limitée à ~5 requêtes/30s sans clé — le module respecte
+  ce rythme automatiquement (`_throttle()`), donc une recherche peut prendre
+  quelques secondes.
+- La détection de version dans `tech_detect.py` ne remonte que ce qui est
+  **explicitement visible** (header ou balise HTML) — un site bien configuré
+  qui masque ses bannières de version ne donnera aucun résultat, ce qui est le
+  comportement attendu (pas de version = pas de faux positif CVE).
+- Ce module fait uniquement de la **recherche en lecture** sur une base
+  publique de vulnérabilités déjà documentées ; il ne teste ni n'exploite rien.
 
 ## Test rapide du module de détection AD (sans backend)
 
