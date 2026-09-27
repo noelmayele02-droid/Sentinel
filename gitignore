@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+
+# Environnements virtuels
+venv/
+.venv/
+env/
+ENV/
+
+# Variables d'environnement / secrets
+.env
+*.key
+
+# Logs générés localement
+logs_export.csv
+*.log
+
+# OS / éditeurs
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

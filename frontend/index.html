@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sentinel - Cyber Intelligence Dashboard</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+  :root {
+    --bg: #05100b; --panel: #0b1f17; --border: #1f4a37;
+    --accent: #35e6a0; --text: #d8ede2; --muted: #7fa393;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: 'Segoe UI', system-ui, sans-serif;
+  }
+  header {
+    padding: 20px 32px; border-bottom: 1px solid var(--border);
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  header h1 { margin: 0; font-size: 22px; letter-spacing: 1px; }
+  header h1 span { color: var(--accent); }
+  .search-bar { display: flex; gap: 10px; padding: 20px 32px; }
+  .search-bar input {
+    flex: 1; padding: 12px 16px; background: var(--panel);
+    border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 15px;
+  }
+  .search-bar button {
+    padding: 12px 24px; background: var(--accent); color: #05170f;
+    border: none; border-radius: 8px; font-weight: 600; cursor: pointer;
+  }
+  .search-bar button:hover { opacity: 0.9; }
+  .grid {
+    display: grid; grid-template-columns: 1.3fr 1fr; gap: 20px; padding: 0 32px 32px;
+  }
+  .panel {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 12px; padding: 20px;
+  }
+  .panel h2 { margin: 0 0 14px; font-size: 15px; color: var(--accent); text-transform: uppercase; letter-spacing: 1px; }
+  #map { height: 380px; border-radius: 8px; }
+  .badge-list { display: flex; flex-wrap: wrap; gap: 8px; }
+  .badge {
+    padding: 5px 12px; background: #12341f; border: 1px solid var(--border);
+    border-radius: 14px; font-size: 13px;
+  }
+  .finding { padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 14px; }
+  .finding:last-child { border-bottom: none; }
+  .sev { font-weight: 700; padding: 2px 8px; border-radius: 4px; font-size: 11px; margin-right: 8px; }
+  .sev.high, .sev.critical { background: #4a1414; color: #ff8080; }
+  .sev.medium { background: #4a3d14; color: #ffd580; }
+  .sev.low { background: #143d20; color: #80ffb0; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .upload-area {
+    border: 2px dashed var(--border); border-radius: 8px; padding: 24px;
+    text-align: center; cursor: pointer; color: var(--muted);
+  }
+  .upload-area:hover { border-color: var(--accent); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>SENTINEL <span>· Cyber Intelligence</span></h1>
+  <div class="muted">by Albert Isaac Mayele</div>
+</header>
+
+<div class="search-bar">
+  <input id="domainInput" type="text" placeholder="Domaine à analyser (ex: exemple.com)" />
+  <button onclick="runScan()">Lancer le scan OSINT</button>
+</div>
+
+<div class="grid">
+  <div class="panel">
+    <h2>Carte de la surface d'attaque</h2>
+    <div id="map"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Technologies & headers de sécurité</h2>
+    <div id="techResults" class="muted">Lancez un scan pour voir les résultats.</div>
+  </div>
+
+  <div class="panel">
+    <h2>Sous-domaines découverts</h2>
+    <div id="subdomainsResults" class="muted">—</div>
+  </div>
+
+  <div class="panel">
+    <h2>Findings priorisés</h2>
+    <div id="findingsResults" class="muted">—</div>
+  </div>
+
+  <div class="panel" style="grid-column: span 2;">
+    <h2>Détection Active Directory (upload de logs CSV)</h2>
+    <div class="upload-area" onclick="document.getElementById('csvInput').click()">
+      Cliquez pour uploader un export de logs Windows Event (CSV)
+    </div>
+    <input type="file" id="csvInput" accept=".csv" style="display:none" onchange="runAdDetection(event)" />
+    <div id="adResults" style="margin-top:16px;"></div>
+  </div>
+</div>
+
+<script>
+const API_BASE = "http://localhost:8000"; // adapter en production
+
+const map = L.map('map', { zoomControl: true }).setView([20, 0], 2);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+  attribution: '&copy; OpenStreetMap &copy; CARTO'
+}).addTo(map);
+let markers = [];
+
+function clearMarkers() { markers.forEach(m => map.removeLayer(m)); markers = []; }
+
+async function runScan() {
+  const domain = document.getElementById('domainInput').value.trim();
+  if (!domain) return;
+
+  document.getElementById('techResults').textContent = "Analyse en cours...";
+  document.getElementById('subdomainsResults').textContent = "Analyse en cours...";
+  document.getElementById('findingsResults').textContent = "Analyse en cours...";
+
+  try {
+    const res = await fetch(`${API_BASE}/api/scan`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ domain, use_ai_scoring: false })
+    });
+    const data = await res.json();
+    renderResults(data);
+  } catch (e) {
+    document.getElementById('techResults').textContent =
+      "Erreur : le backend n'est pas joignable (lancez `uvicorn app:app --reload`).";
+  }
+}
+
+function renderResults(data) {
+  // Technologies
+  const techDiv = document.getElementById('techResults');
+  techDiv.innerHTML = `
+    <div class="badge-list">${(data.technologies||[]).map(t => `<span class="badge">${t}</span>`).join('') || '<span class="muted">Aucune techno identifiée</span>'}</div>
+    <div style="margin-top:12px;">
+      ${Object.entries(data.security_headers||{}).map(([h,present]) =>
+        `<div class="finding">${present ? '✓' : '✗'} ${h}</div>`).join('')}
+    </div>`;
+
+  // Sous-domaines
+  const subDiv = document.getElementById('subdomainsResults');
+  subDiv.innerHTML = `<div class="muted">${data.subdomains_total_found} trouvé(s) au total</div>` +
+    (data.subdomains||[]).map(s => `<div class="finding">${s}</div>`).join('');
+
+  // Findings
+  const findDiv = document.getElementById('findingsResults');
+  findDiv.innerHTML = (data.findings||[]).map(f =>
+    `<div class="finding"><span class="sev medium">MOYEN</span>${f.detail}</div>`
+  ).join('') || '<div class="muted">Aucun finding critique détecté.</div>';
+
+  // Carte
+  clearMarkers();
+  (data.geo_points||[]).forEach(p => {
+    if (p.lat && p.lon) {
+      const m = L.circleMarker([p.lat, p.lon], {
+        radius: 8, color: '#35e6a0', fillColor: '#35e6a0', fillOpacity: 0.6
+      }).addTo(map).bindPopup(`<b>${p.hostname}</b><br>${p.ip}<br>${p.city}, ${p.country}<br>${p.org||''}`);
+      markers.push(m);
+    }
+  });
+  if (markers.length) {
+    const group = new L.featureGroup(markers);
+    map.fitBounds(group.getBounds().pad(0.3));
+  }
+}
+
+async function runAdDetection(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  const formData = new FormData();
+  formData.append('file', file);
+
+  document.getElementById('adResults').textContent = "Analyse des logs en cours...";
+
+  try {
+    const res = await fetch(`${API_BASE}/api/detect-ad`, { method: 'POST', body: formData });
+    const data = await res.json();
+    const div = document.getElementById('adResults');
+    div.innerHTML = data.alerts.map(a => `
+      <div class="finding">
+        <span class="sev ${a.severity}">${a.severity.toUpperCase()}</span>
+        <b>${a.type}</b> — compte: ${a.account}<br>
+        <span class="muted">MITRE ${a.mitre_technique} · ${a.recommendation}</span>
+      </div>
+    `).join('') || '<div class="muted">Aucune alerte détectée dans ces logs.</div>';
+  } catch (e) {
+    document.getElementById('adResults').textContent = "Erreur : backend non joignable.";
+  }
+}
+</script>
+</body>
+</html>
